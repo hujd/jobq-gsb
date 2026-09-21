@@ -1,0 +1,15 @@
+{
+  "name": "jobq",
+  "version": "1.4.0",
+  "description": "In-process job queue with lease-based reservation (zero dependencies)",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {},
+  "license": "MIT",
+  "private": true
+}
