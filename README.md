@@ -53,21 +53,27 @@ node --test            # whole suite
 node --test test/exactlyOnce.test.js
 ```
 
-## Known issue (open)
+## Exactly-once under lease expiry
 
-`test/exactlyOnce.test.js` is **flaky** — roughly one run in fifty fails with:
+The lease token is a **fencing token**. When a handler blocks the event loop
+(a large synchronous parse, a blocking native call, …) past `leaseMs`, the
+heartbeat cannot fire and the lease expires; another worker may then reserve
+the job. This is safe by construction:
 
-```
-AssertionError: expected handler to run once, but ran 2 times
-```
+1. As soon as a heartbeat renewal fails, the worker aborts `ctx.signal` and
+   marks the run as lease-lost. A cooperative handler checks the signal and
+   stops before committing any side effect (e.g. before the charge call).
+2. A lease-lost run never calls `ack`/`nack`. Both stores additionally verify
+   the lease token on every `ack` and `nack`, so even a stray call with a stale
+   token cannot remove or release a job that another worker now owns.
 
-We have also seen the same symptom in production (4 workers, `leaseMs: 5000`,
-handlers taking 2–8s): a job occasionally gets processed twice, which double-charges
-the customer. Nothing in the suite currently reproduces it on demand, so the failure
-is timing dependent.
+Handlers still own their side effects: respect `ctx.signal` around awaits and
+immediately before external calls, exactly as the usage example shows.
 
-Related note in the code: `MemoryStore#ack` deliberately skips the lease-token check
-because "the worker aborts as soon as a renewal fails" — see the comment there.
+`test/exactlyOnce.test.js` covers the timing-dependent case;
+`test/exactlyOnceRegression.test.js` deterministically blocks the event loop
+past the lease and must reproduce a double execution on the pre-fix code on
+every run.
 
 ## Layout
 

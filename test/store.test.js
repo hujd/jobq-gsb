@@ -48,6 +48,29 @@ for (const [label, factory] of BACKENDS) {
     assert.strictEqual(store.renew('j1', 'not-my-token', 10, 100), false);
   });
 
+  test(`[${label}] ack and nack reject a stale lease token (fencing)`, () => {
+    const store = factory();
+    store.enqueue({ id: 'j1', name: 'work' }, 0);
+
+    // Worker A takes the lease, then loses it after expiry.
+    const first = store.reserve(0, 100);
+    store.recoverExpired(200);
+
+    // Worker B now legitimately owns the job.
+    const second = store.reserve(200, 100);
+    assert.ok(second);
+
+    // A's stale token must not be able to nack or ack B's lease away.
+    assert.strictEqual(store.nack('j1', first.leaseToken, 200, 0), false);
+    assert.strictEqual(store.stats().leased, 1);
+    assert.strictEqual(store.ack('j1', first.leaseToken), false);
+    assert.strictEqual(store.stats().total, 1);
+
+    // B can still finish the job.
+    assert.strictEqual(store.ack('j1', second.leaseToken), true);
+    assert.strictEqual(store.stats().total, 0);
+  });
+
   test(`[${label}] nack returns the job to the pool`, () => {
     const store = factory();
     store.enqueue({ id: 'j1', name: 'work' }, 0);

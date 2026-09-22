@@ -74,9 +74,20 @@ class Worker {
     const controller = new AbortController();
     const ctx = { workerId: this.id, signal: controller.signal };
 
+    // Set when a heartbeat fails: we have lost the lease and another worker
+    // may already own the job. Every subsequent ack/nack would carry a stale
+    // token and is therefore suppressed; the handler is aborted so a
+    // cooperative handler stops before performing any duplicate side effect.
+    let leaseLost = false;
+
     // Keep the lease alive for as long as the handler runs.
     const heartbeat = setInterval(() => {
-      this.queue.renew(job.id, leaseToken);
+      const renewed = this.queue.renew(job.id, leaseToken);
+      if (!renewed) {
+        leaseLost = true;
+        controller.abort();
+        clearInterval(heartbeat);
+      }
     }, heartbeatMs);
 
     this.inFlight += 1;
@@ -88,6 +99,14 @@ class Worker {
     } finally {
       clearInterval(heartbeat);
       this.inFlight -= 1;
+    }
+
+    // The lease expired mid-run. The store (or another worker) already owns
+    // the job; ack/nacking with our stale token would either be rejected by
+    // the store's fencing check or, worse, steal the job back. Do nothing.
+    if (leaseLost) {
+      this.stats.aborted += 1;
+      return;
     }
 
     if (failed) {
