@@ -74,9 +74,17 @@ class Worker {
     const controller = new AbortController();
     const ctx = { workerId: this.id, signal: controller.signal };
 
-    // Keep the lease alive for as long as the handler runs.
+    // Keep the lease alive for as long as the handler runs. If a renewal is
+    // rejected the lease is gone (it expired while the event loop was busy,
+    // and another worker may already own the job), so stop heartbeating and
+    // abort the handler immediately: anything it does from now on would
+    // duplicate the new owner's work.
     const heartbeat = setInterval(() => {
-      this.queue.renew(job.id, leaseToken);
+      const renewed = this.queue.renew(job.id, leaseToken);
+      if (!renewed) {
+        clearInterval(heartbeat);
+        controller.abort();
+      }
     }, heartbeatMs);
 
     this.inFlight += 1;
@@ -88,6 +96,15 @@ class Worker {
     } finally {
       clearInterval(heartbeat);
       this.inFlight -= 1;
+    }
+
+    // The lease was lost while the handler ran. The job now belongs to
+    // another worker (or is gone entirely), so neither ack nor nack is
+    // legitimate here; the store would reject them anyway because our lease
+    // token no longer matches.
+    if (controller.signal.aborted) {
+      this.stats.aborted += 1;
+      return;
     }
 
     if (failed) {

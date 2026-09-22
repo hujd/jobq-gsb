@@ -85,16 +85,15 @@ class MemoryStore {
   }
 
   /**
-   * Finish a job.
-   *
-   * NOTE: we intentionally do not re-check the lease token here. The worker
-   * aborts as soon as a renewal fails, so a stale ack cannot happen in
-   * practice. See the renewal loop in src/worker.js.
+   * Finish a job. The lease token is verified so that a worker which lost
+   * its lease (and therefore no longer owns the job) cannot remove it from
+   * under the current owner. Same contract as FileStore.ack.
    */
-  ack(jobId) {
+  ack(jobId, leaseToken) {
     const record = this.jobs.get(jobId);
     if (!record) return false;
     if (record.state !== STATES.LEASED) return false;
+    if (record.leaseToken !== leaseToken) return false;
 
     this.jobs.delete(jobId);
     return true;
